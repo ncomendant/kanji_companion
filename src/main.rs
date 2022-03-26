@@ -1,4 +1,4 @@
-use std::{collections::{HashMap}, rc::Rc, cell::{RefCell}, ops::Deref};
+use std::{collections::{HashMap}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering};
 use std::hash::Hash;
 
 mod error;
@@ -7,17 +7,38 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 type NodeId = usize;
 
+pub struct ReadOnly<T> {
+    inner: Rc<RefCell<T>>
+}
+
+impl<T> ReadOnly<T> {
+    pub fn borrow<'a>(&'a self) -> impl Deref<Target = T> + 'a {
+        self.inner.deref().borrow()
+    }
+}
+
+impl <T> From <Rc<RefCell<T>>> for ReadOnly<T> {
+    fn from(inner: Rc<RefCell<T>>) -> Self {
+        ReadOnly { inner }
+    }
+}
+
+
 pub struct Graph<T> {
     children: Vec<Rc<RefCell<Node<T>>>>,
 }
 
 impl <T: Eq + Hash> Graph<T> {
-    pub fn sort(&mut self) {
+    pub fn sort_by(&mut self, handler: impl Fn(&ReadOnly<Node<T>>, &ReadOnly<Node<T>>) -> Ordering) {
         let mut order: Vec<Rc<RefCell<Node<T>>>> = Default::default();
-        let mut learnable_characters = self.children.clone();
+        let mut learnable_nodes = self.children.clone();
         let mut parents_learned: HashMap<NodeId, usize> = Default::default();
-        while !learnable_characters.is_empty() {
-            let next = learnable_characters.pop().unwrap();
+        while !learnable_nodes.is_empty() {
+            learnable_nodes.sort_by(|a, b| {
+                handler(&a.clone().into(), &b.clone().into())
+            });
+            learnable_nodes.reverse();
+            let next = learnable_nodes.pop().unwrap();
             {
                 let next = next.deref().borrow();
                 for child in &next.children {
@@ -28,7 +49,7 @@ impl <T: Eq + Hash> Graph<T> {
                         *count == child.parents.len()
                     };
                     if learnable {
-                        learnable_characters.push(child.clone());
+                        learnable_nodes.push(child.clone());
                     }
                 }
             }
@@ -37,8 +58,8 @@ impl <T: Eq + Hash> Graph<T> {
         self.children = order;
     }
 
-    pub fn nodes(&self) -> &[Rc<RefCell<Node<T>>>] {
-        &self.children
+    pub fn nodes(&self) -> Vec<ReadOnly<Node<T>>> {
+        self.children.iter().map(|c| ReadOnly::from(c.clone())).collect::<Vec<_>>()
     }
 }
 
@@ -54,13 +75,42 @@ impl <T> Node<T> {
     pub fn val(&self) -> &T {
         &self.val
     }
+
+    pub fn children(&self) -> Vec<ReadOnly<Node<T>>> {
+        self.children.iter().map(|c| ReadOnly::from(c.clone())).collect::<Vec<_>>()
+    }
+
+    pub fn parents(&self) -> Vec<ReadOnly<Node<T>>> {
+        self.parents.iter().map(|c| ReadOnly::from(c.clone())).collect::<Vec<_>>()
+    }
+
+    pub fn descendent_len(&self) -> usize {
+        let children = &self.children;
+        let mut len = children.len();
+        for child in children {
+            len += child.deref().borrow().descendent_len()
+        }
+        len
+    }
+
+    pub fn ancestor_len(&self) -> usize {
+        let parents = &self.parents;
+        let mut len = parents.len();
+        for parent in parents {
+            len += parent.deref().borrow().ancestor_len()
+        }
+        len
+    }
 }
 
 fn main() {
     let mut characters = parse_characters().unwrap();
-    characters.sort();
-    println!("{:?}", characters.nodes().iter().map(|n| *n.deref().borrow().val()).collect::<Vec<_>>());
+    characters.sort_by(|a, b| {
+        b.borrow().descendent_len().cmp(&a.borrow().descendent_len())
+        // a.borrow().children().len().cmp(&b.borrow().children.len())
 
+    });
+    println!("{:?}", characters.nodes().iter().map(|n| *n.deref().borrow().val()).collect::<Vec<_>>());
 }
 
 fn parse_characters() -> Result<Graph<char>> {

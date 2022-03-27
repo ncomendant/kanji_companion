@@ -4,6 +4,9 @@ use std::fmt;
 pub enum Error {
     Io(std::io::Error),
     JsValue(wasm_bindgen::JsValue),
+    WindowNotFound,
+    DocumentNotFound,
+    ElementNotFound,
 }
 
 impl fmt::Display for Error {
@@ -11,6 +14,9 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "{}", e),
             Error::JsValue(e) => write!(f, "{:?}", e),
+            Error::WindowNotFound => write!(f, "window not found"),
+            Error::DocumentNotFound => write!(f, "document not found"),
+            Error::ElementNotFound => write!(f, "element not found"),
         }
     }
 }

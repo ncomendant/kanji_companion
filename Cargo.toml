@@ -39,4 +39,5 @@ features = [
     'Window',
     'Location',
     'DomTokenList',
+    'MouseEvent',
 ]

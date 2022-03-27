@@ -26,12 +26,12 @@ body {
     border: 1px solid black;
     padding: 0.5em;
     background-color: white;
-    transition: transform 150ms, background-color 150ms;
     max-width: 80vw;
     max-height: 80vh;
 }
 
 .character:hover {
+    transition: transform 150ms, background-color 150ms;
     cursor: pointer;
     transform: scale(1.5);
     z-index: 100;
@@ -56,4 +56,28 @@ body {
 
 .hidden {
     display: none !important;
+}
+
+#overlayWrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    background-color: rgba(0, 0, 0, 0.4);
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#overlay {
+    flex: 1 1 auto;
+    background-color: white;
+    color: black;
+    max-width: 90%;
+    padding: 1em;
+}
+
+#overlay .writing {
+    font-size: 3em;
 }

@@ -1,11 +1,15 @@
 use std::{collections::{HashMap, HashSet}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering};
+use enclose::enclose;
+use error::Error;
+use html::Html;
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{RequestInit, RequestMode, Request, Response, HtmlElement};
+use web_sys::{RequestInit, RequestMode, Request, Response, HtmlElement, MouseEvent, Document};
 use std::hash::Hash;
 
 use regex::Regex;
 
+mod html;
 mod error;
 
 #[wasm_bindgen]
@@ -93,7 +97,7 @@ impl <T> Graph<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node<T> {
     id: NodeId,
     val: T,
@@ -159,12 +163,24 @@ pub async fn main() -> std::result::Result<(), JsValue> {
     Ok(())
 }
 
+pub fn document() -> Result<Document> {
+    Ok(web_sys::window()
+        .ok_or(Error::WindowNotFound)?
+        .document()
+        .ok_or(Error::DocumentNotFound)?
+    )
+}
+
 async fn init() -> Result<()> {
+    let document = crate::document()?;
+    let html = Rc::new(Html::new(&document)?);
+
+    set_on_click(&html.overlay.wrapper, enclose!((html) move |_event| {
+        html.overlay.wrapper.class_list().add_1("hidden").unwrap();
+    })).forget();
+
     let characters = fetch_local_text("/data/characters.txt").await?;
     let mut characters = parse_characters(&characters)?;
-
-    let document = web_sys::window().expect("no window").document().expect("no document");
-    let characters_el: HtmlElement = document.query_selector("#characters")?.expect("element not found").unchecked_into();
 
     log("loading terms...");
     let terms = fetch_local_text("/data/edict2u.txt").await?;
@@ -182,24 +198,57 @@ async fn init() -> Result<()> {
     });
 
     characters.nodes().iter().try_for_each(|node| {
-        let node = node.borrow();
-        let val = node.val();
-        let character_el: HtmlElement = document.create_element("div")?.unchecked_into();
-        character_el.class_list().add_1("character")?;
-        if val.is_radical {
-            character_el.class_list().add_1("radical")?;
-        } else {
-            character_el.class_list().add_1("kanji")?;
-        }
+        let character_el = {
+            let node = node.borrow();
+            let val = node.val();
+            let character_el: HtmlElement = document.create_element("div")?.unchecked_into();
+            character_el.class_list().add_1("character")?;
+            if val.is_radical {
+                character_el.class_list().add_1("radical")?;
+            } else {
+                character_el.class_list().add_1("kanji")?;
+            }
+            character_el.set_text_content(Some(&val.writing.to_string()));
+            character_el
+        };
 
-        character_el.set_text_content(Some(&val.writing.to_string()));
-        characters_el.append_child(&character_el)?;
+        set_on_click(&character_el, enclose!((html, node) move |_event| {
+            on_character_click(&html, &node).unwrap();
+        })).forget();
+        html.characters.append_child(&character_el)?;
         Ok::<(), error::Error>(())
     })?;
 
     log("complete");
     Ok(())
 }
+
+fn on_character_click(html: &Html, node: &ReadOnly<Node<Character>>) -> Result<()> {
+    let node = node.borrow();
+    let character = node.val();
+
+    html.overlay.writing.set_text_content(Some(&character.writing.to_string()));
+    html.overlay.readings.set_text_content(Some(&character.readings.join("、")));
+    html.overlay.meaning.set_text_content(Some(&character.meaning));
+
+    let parents_str = node.parents().iter().map(|p| p.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
+    let children_str = node.children().iter().map(|c| c.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
+
+    html.overlay.parents.set_text_content(Some(&parents_str));
+    html.overlay.children.set_text_content(Some(&children_str));
+
+    html.overlay.wrapper.class_list().remove_1("hidden")?;
+
+    Ok(())
+}
+
+fn set_on_click<F>(el: &HtmlElement, handler: F) -> Closure<dyn FnMut(MouseEvent)>
+    where
+        F: FnMut(MouseEvent) + 'static {
+            let c = Closure::wrap(Box::new(handler) as Box<dyn FnMut(MouseEvent)>);
+            el.set_onclick(Some(c.as_ref().unchecked_ref()));
+            c
+        }
 
 #[derive(Debug, Clone)]
 pub struct Term {
@@ -252,11 +301,11 @@ fn parse_term(s: &str) -> Result<Term> {
         }
     }).collect();
     let (writings, readings) = if let Some(cap) = Regex::new(WRITING_READING_RE).unwrap().captures(fields[0]) {
-        let writings = cap[1].split(";").map(|s| s.to_string()).collect();
-        let readings = Some(cap[2].split(";").map(|s| s.to_string()).collect());
+        let writings = cap[1].split(";").map(|s| s.trim().to_string()).collect();
+        let readings = Some(cap[2].split(";").map(|s| s.trim().to_string()).collect());
         (writings, readings)
     } else if let Some(cap) = Regex::new(WRITING_RE).unwrap().captures(fields[0]) {
-        let writings = cap[1].split(";").map(|s| s.to_string()).collect();
+        let writings = cap[1].split(";").map(|s| s.trim().to_string()).collect();
         (writings, None)
     } else {
         panic!("unknown entry: {}", s);

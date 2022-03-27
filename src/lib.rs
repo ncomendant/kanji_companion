@@ -1,9 +1,22 @@
-use std::{collections::{HashMap, HashSet}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering, io::{BufReader, BufRead}};
+use std::{collections::{HashMap, HashSet}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering};
+use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{RequestInit, RequestMode, Request, Response, HtmlElement};
 use std::hash::Hash;
 
 use regex::Regex;
 
 mod error;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    pub fn error(s: &str);
+    #[wasm_bindgen(js_namespace = console)]
+    pub fn log(s: &str);
+    #[wasm_bindgen(js_namespace = console)]
+    pub fn warn(s: &str);
+}
 
 pub type Result<T> = std::result::Result<T, error::Error>;
 
@@ -12,6 +25,17 @@ type NodeId = usize;
 const WRITING_RE: &str = r"^([^ ]+).+$";
 const WRITING_READING_RE: &str = r"^([^ ]+) \[([^\[\]]+)\].+$";
 
+#[derive(Debug, Clone)]
+pub struct Character {
+    writing: char,
+    is_radical: bool,
+    stroke_count: u8,
+    meaning: String,
+    readings: Vec<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReadOnly<T> {
     inner: Rc<RefCell<T>>
 }
@@ -29,11 +53,12 @@ impl <T> From <Rc<RefCell<T>>> for ReadOnly<T> {
 }
 
 
+#[derive(Debug, Clone)]
 pub struct Graph<T> {
     children: Vec<Rc<RefCell<Node<T>>>>,
 }
 
-impl <T: Eq + Hash> Graph<T> {
+impl <T> Graph<T> {
     pub fn sort_by(&mut self, handler: impl Fn(&ReadOnly<Node<T>>, &ReadOnly<Node<T>>) -> Ordering) {
         let mut order: Vec<Rc<RefCell<Node<T>>>> = Default::default();
         let mut learnable_nodes = self.children.clone();
@@ -89,58 +114,91 @@ impl <T> Node<T> {
         self.parents.iter().map(|c| ReadOnly::from(c.clone())).collect::<Vec<_>>()
     }
 
-    pub fn descendent_len(&self) -> usize {
+    pub fn descendent_count(&self) -> usize {
         let children = &self.children;
         let mut len = children.len();
         for child in children {
-            len += child.deref().borrow().descendent_len()
+            len += child.deref().borrow().descendent_count()
         }
         len
     }
 
-    pub fn ancestor_len(&self) -> usize {
+    pub fn ancestor_count(&self) -> usize {
         let parents = &self.parents;
         let mut len = parents.len();
         for parent in parents {
-            len += parent.deref().borrow().ancestor_len()
+            len += parent.deref().borrow().ancestor_count()
         }
         len
     }
 }
 
-fn main() {
-    println!("parsing characters...");
-    let mut characters = parse_characters().unwrap();
-    
-    println!("parsing terms...");
-    let terms = parse_terms().unwrap();
+async fn fetch_local_text(path: &str) -> Result<String> {
+    let location = web_sys::window().expect("no window")
+        .location();
 
-    println!("grouping terms...");
+    let mut opts = RequestInit::new();
+    opts.method("GET");
+    opts.mode(RequestMode::Cors);
+
+    let url = format!("{}{}{}", location.origin()?, location.pathname()?, path);
+    let request = Request::new_with_str_and_init(&url, &opts)?;
+
+    let window = web_sys::window().expect("window not found");
+    let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
+    let resp: Response = resp_value.dyn_into()?;
+    let text = JsFuture::from(resp.text()?).await?;
+    let text = text.as_string().expect("no string found");
+    Ok(text)
+}
+
+#[wasm_bindgen(start)]
+pub async fn main() -> std::result::Result<(), JsValue> {
+    console_error_panic_hook::set_once();
+    init().await.unwrap();
+    Ok(())
+}
+
+async fn init() -> Result<()> {
+    let characters = fetch_local_text("/data/characters.txt").await?;
+    let mut characters = parse_characters(&characters)?;
+
+    let document = web_sys::window().expect("no window").document().expect("no document");
+    let characters_el: HtmlElement = document.query_selector("#characters")?.expect("element not found").unchecked_into();
+
+    log("loading terms...");
+    let terms = fetch_local_text("/data/edict2u.txt").await?;
+    log("parsing terms...");
+    let terms = parse_terms(&terms)?;
+
+    log("grouping terms...");
     let grouped_terms = group_terms_by_chars(&terms);
 
-    println!("sorting characters");
+    log("sorting characters");
     characters.sort_by(|a, b| {
-        let a_terms = grouped_terms.get(a.borrow().val());
-        let b_terms = grouped_terms.get(b.borrow().val());
-
-        let a_score = if let Some(a_terms) = a_terms {
-            a_terms.len()
-        } else {
-            0
-        };
-
-        let b_score = if let Some(b_terms) = b_terms {
-            b_terms.len()
-        } else {
-            0
-        };
-
+        let a_score = grouped_terms.get(&a.borrow().val().writing).map(|terms| terms.iter().filter(|t| t.popular).count()).unwrap_or(0);
+        let b_score = grouped_terms.get(&b.borrow().val().writing).map(|terms| terms.iter().filter(|t| t.popular).count()).unwrap_or(0);
         b_score.cmp(&a_score)
     });
 
-    println!("{:?}", characters.nodes().iter().map(|n| *n.deref().borrow().val()).collect::<Vec<_>>());
+    characters.nodes().iter().try_for_each(|node| {
+        let node = node.borrow();
+        let val = node.val();
+        let character_el: HtmlElement = document.create_element("div")?.unchecked_into();
+        character_el.class_list().add_1("character")?;
+        if val.is_radical {
+            character_el.class_list().add_1("radical")?;
+        } else {
+            character_el.class_list().add_1("kanji")?;
+        }
 
-    println!("complete");
+        character_el.set_text_content(Some(&val.writing.to_string()));
+        characters_el.append_child(&character_el)?;
+        Ok::<(), error::Error>(())
+    })?;
+
+    log("complete");
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -169,17 +227,16 @@ fn group_terms_by_chars(terms: &[Term]) -> HashMap<char, Vec<&Term>> {
     })
 }
 
-fn parse_terms() -> Result<Vec<Term>> {
-    let file = std::fs::File::open("data/edict2u")?;
-    let reader = BufReader::new(file);
-    let terms: Result<Vec<Term>> = reader.lines().enumerate().try_fold(Vec::new(),|mut acc, (i, l)| {
-        if i > 0 {
-            let term = parse_term(&l?)?;
+fn parse_terms(s: &str) -> Result<Vec<Term>> {
+    let lines = s.split("\n").map(|s| s.trim());
+    let terms: Result<Vec<Term>> = lines.enumerate().try_fold(Vec::new(),|mut acc, (i, line)| {
+        if i > 0 && !line.is_empty() {
+            let term = parse_term(line)?;
             acc.push(term);
         }
         Ok(acc)
     });
-    Ok(terms?)
+    terms
 }
 
 fn parse_term(s: &str) -> Result<Term> {
@@ -213,11 +270,11 @@ fn parse_term(s: &str) -> Result<Term> {
     })
 }
 
-fn parse_characters() -> Result<Graph<char>> {
-    let mut nodes: HashMap<char, Rc<RefCell<Node<char>>>> = Default::default();
+fn parse_characters(s: &str) -> Result<Graph<Character>> {
+    let mut nodes: HashMap<char, Rc<RefCell<Node<Character>>>> = Default::default();
     let mut parents: HashMap<char, Vec<char>> = Default::default();
     let mut children: HashMap<char, Vec<char>> = Default::default();
-    std::fs::read_to_string("data/characters")?
+    s
         .split("\n")
         .enumerate()
         .for_each(|(i, l)| {
@@ -227,10 +284,26 @@ fn parse_characters() -> Result<Graph<char>> {
                 .split("")
                 .filter_map(|s| s.chars().next())
                 .collect::<Vec<_>>();
+            let stroke_count = fields[2].parse().expect("failed parsing stroke count");
+            let readings = fields[3].split("、").map(|s| s.trim().to_string()).collect();
+            let meaning = fields[4].to_string();
+            let is_radical = fields[5].eq_ignore_ascii_case("1");
+            let note = if fields[6].is_empty() {
+                None
+            } else {
+                Some(fields[6].to_string())
+            };
 
             let node = Rc::new(RefCell::new(Node {
                 id: i,
-                val: character,
+                val: Character {
+                    writing: character,
+                    is_radical,
+                    stroke_count,
+                    meaning,
+                    readings,
+                    note,
+                },
                 parents: Default::default(),
                 children: Default::default(),
             }));
@@ -244,7 +317,7 @@ fn parse_characters() -> Result<Graph<char>> {
             parents.insert(character, p);
         });
 
-    let mut root_nodes: Vec<Rc<RefCell<Node<char>>>> = Default::default();
+    let mut root_nodes: Vec<Rc<RefCell<Node<Character>>>> = Default::default();
 
     for (k, node) in nodes.iter() {
         let parents = parents.get(k).unwrap().iter().map(|p| nodes.get(p).unwrap().clone()).collect::<Vec<_>>();

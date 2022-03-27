@@ -1,11 +1,16 @@
-use std::{collections::{HashMap}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering};
+use std::{collections::{HashMap, HashSet}, rc::Rc, cell::{RefCell}, ops::Deref, cmp::Ordering, io::{BufReader, BufRead}};
 use std::hash::Hash;
+
+use regex::Regex;
 
 mod error;
 
 pub type Result<T> = std::result::Result<T, error::Error>;
 
 type NodeId = usize;
+
+const WRITING_RE: &str = r"^([^ ]+).+$";
+const WRITING_READING_RE: &str = r"^([^ ]+) \[([^\[\]]+)\].+$";
 
 pub struct ReadOnly<T> {
     inner: Rc<RefCell<T>>
@@ -104,13 +109,108 @@ impl <T> Node<T> {
 }
 
 fn main() {
+    println!("parsing characters...");
     let mut characters = parse_characters().unwrap();
-    characters.sort_by(|a, b| {
-        b.borrow().descendent_len().cmp(&a.borrow().descendent_len())
-        // a.borrow().children().len().cmp(&b.borrow().children.len())
+    
+    println!("parsing terms...");
+    let terms = parse_terms().unwrap();
 
+    println!("grouping terms...");
+    let grouped_terms = group_terms_by_chars(&terms);
+
+    println!("sorting characters");
+    characters.sort_by(|a, b| {
+        let a_terms = grouped_terms.get(a.borrow().val());
+        let b_terms = grouped_terms.get(b.borrow().val());
+
+        let a_score = if let Some(a_terms) = a_terms {
+            a_terms.len()
+        } else {
+            0
+        };
+
+        let b_score = if let Some(b_terms) = b_terms {
+            b_terms.len()
+        } else {
+            0
+        };
+
+        b_score.cmp(&a_score)
     });
+
     println!("{:?}", characters.nodes().iter().map(|n| *n.deref().borrow().val()).collect::<Vec<_>>());
+
+    println!("complete");
+}
+
+#[derive(Debug, Clone)]
+pub struct Term {
+    pub id: String,
+    pub writings: Vec<String>,
+    pub readings: Option<Vec<String>>,
+    pub meanings: Vec<String>,
+    pub popular: bool,
+}
+
+fn group_terms_by_chars(terms: &[Term]) -> HashMap<char, Vec<&Term>> {
+    terms.iter().fold(HashMap::new(), |mut acc, term| {
+        let chars = term.writings.iter().fold(HashSet::new(), |mut acc, writing| {
+            writing.chars().for_each(|c| {
+                acc.insert(c);
+            });
+            acc
+        });
+
+        chars.iter().for_each(|c| {
+            let entry = acc.entry(*c).or_insert(Vec::new());
+            entry.push(term);
+        });
+        acc
+    })
+}
+
+fn parse_terms() -> Result<Vec<Term>> {
+    let file = std::fs::File::open("data/edict2u")?;
+    let reader = BufReader::new(file);
+    let terms: Result<Vec<Term>> = reader.lines().enumerate().try_fold(Vec::new(),|mut acc, (i, l)| {
+        if i > 0 {
+            let term = parse_term(&l?)?;
+            acc.push(term);
+        }
+        Ok(acc)
+    });
+    Ok(terms?)
+}
+
+fn parse_term(s: &str) -> Result<Term> {
+    let fields = s.split("/").filter(|s| !s.is_empty()).collect::<Vec<_>>();
+    let id = fields[fields.len()-1].to_string();
+    let mut popular = false;
+    let meanings = fields[1..fields.len()-1].iter().filter_map(|s| {
+        if s.eq_ignore_ascii_case("(P)") {
+            popular = true;
+            None
+        } else {
+            Some(s.to_string())
+        }
+    }).collect();
+    let (writings, readings) = if let Some(cap) = Regex::new(WRITING_READING_RE).unwrap().captures(fields[0]) {
+        let writings = cap[1].split(";").map(|s| s.to_string()).collect();
+        let readings = Some(cap[2].split(";").map(|s| s.to_string()).collect());
+        (writings, readings)
+    } else if let Some(cap) = Regex::new(WRITING_RE).unwrap().captures(fields[0]) {
+        let writings = cap[1].split(";").map(|s| s.to_string()).collect();
+        (writings, None)
+    } else {
+        panic!("unknown entry: {}", s);
+    };
+    Ok(Term {
+        id,
+        popular,
+        writings,
+        readings,
+        meanings,
+    })
 }
 
 fn parse_characters() -> Result<Graph<char>> {

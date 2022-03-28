@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "kanji_companion"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "console_error_panic_hook",
  "enclose",
@@ -66,6 +66,7 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm_mutex",
  "web-sys",
 ]
 
@@ -246,6 +247,12 @@ name = "wasm-bindgen-shared"
 version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d958d035c4438e28c70e4321a2911302f10135ce78a9c7834c0cab4123d06a2"
+
+[[package]]
+name = "wasm_mutex"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63ed8b4fb7a05502382cb27f7a0c349832df6b460bf9c9ff7cf8b4f820c09040"
 
 [[package]]
 name = "web-sys"

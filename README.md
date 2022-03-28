@@ -8,7 +8,7 @@ Calculates optimal learning order for Japanese Kanji
 - [x] Character overlay
   - [ ] Stroke order/count
   - [ ] Example words 
-- [ ] Properly handle overlay click event closures
+- [x] Properly handle overlay click event closures
 - [ ] Pare down term data to improve load times
 - [ ] State pushing and navigation (e.g. proper use of back button)
 - [ ] Custom sort filters

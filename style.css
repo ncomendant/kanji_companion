@@ -81,3 +81,23 @@ body {
 #overlay .writing {
     font-size: 3em;
 }
+
+#overlay .parents div, #overlay .children div {
+    display: inline-block;
+    padding: 0.5em;
+    margin: 0.25em;
+}
+
+#overlay .parents div {
+    background-color: rgb(255, 184, 255);
+}
+
+#overlay .children div {
+    background-color: rgb(170, 200, 255);
+}
+
+#overlay .parents div:hover, #overlay .children div:hover {
+    cursor: pointer;
+    transition: background-color 150ms;
+    background-color: lightgoldenrodyellow !important;
+}

@@ -20,6 +20,7 @@ impl Html {
 
 pub struct OverlayHtml {
     pub wrapper: HtmlElement,
+    pub div: HtmlElement,
     pub writing: HtmlElement,
     pub readings: HtmlElement,
     pub meaning: HtmlElement,
@@ -31,6 +32,7 @@ impl OverlayHtml {
     pub fn new(document: &Document) -> Result<Self> {
         Ok(OverlayHtml {
             wrapper: query(&document, "#overlayWrapper")?,
+            div: query(&document, "#overlay")?,
             writing: query(&document, "#overlay .writing")?,
             readings: query(&document, "#overlay .readings")?,
             meaning: query(&document, "#overlay .meaning")?,

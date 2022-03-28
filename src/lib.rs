@@ -175,6 +175,10 @@ async fn init() -> Result<()> {
     let document = crate::document()?;
     let html = Rc::new(Html::new(&document)?);
 
+    set_on_click(&html.overlay.div, |event| {
+        event.stop_propagation();
+    }).forget();
+
     set_on_click(&html.overlay.wrapper, enclose!((html) move |_event| {
         html.overlay.wrapper.class_list().add_1("hidden").unwrap();
     })).forget();
@@ -197,7 +201,7 @@ async fn init() -> Result<()> {
         b_score.cmp(&a_score)
     });
 
-    characters.nodes().iter().try_for_each(|node| {
+    characters.nodes().iter().try_for_each(enclose!((html) move |node| {
         let character_el = {
             let node = node.borrow();
             let val = node.val();
@@ -213,17 +217,17 @@ async fn init() -> Result<()> {
         };
 
         set_on_click(&character_el, enclose!((html, node) move |_event| {
-            on_character_click(&html, &node).unwrap();
+            on_character_click(html.clone(), &node).unwrap();
         })).forget();
         html.characters.append_child(&character_el)?;
         Ok::<(), error::Error>(())
-    })?;
+    }))?;
 
     log("complete");
     Ok(())
 }
 
-fn on_character_click(html: &Html, node: &ReadOnly<Node<Character>>) -> Result<()> {
+fn on_character_click(html: Rc<Html>, node: &ReadOnly<Node<Character>>) -> Result<()> {
     let node = node.borrow();
     let character = node.val();
 
@@ -231,11 +235,43 @@ fn on_character_click(html: &Html, node: &ReadOnly<Node<Character>>) -> Result<(
     html.overlay.readings.set_text_content(Some(&character.readings.join("、")));
     html.overlay.meaning.set_text_content(Some(&character.meaning));
 
-    let parents_str = node.parents().iter().map(|p| p.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
-    let children_str = node.children().iter().map(|c| c.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
+    let document = document()?;
 
-    html.overlay.parents.set_text_content(Some(&parents_str));
-    html.overlay.children.set_text_content(Some(&children_str));
+    html.overlay.parents.set_inner_html("");
+    node.parents().iter().try_for_each(enclose!((html) |p| {
+        let parent_el = {
+            let p = p.borrow();
+            let parent_el: HtmlElement = document.create_element("div")?.unchecked_into();
+            parent_el.set_text_content(Some(&p.val().writing.to_string()));
+            html.overlay.parents.append_child(&parent_el)?;
+            parent_el
+        };
+        set_on_click(&parent_el, enclose!((html, p) move |_event| {
+            on_character_click(html.clone(), &p).unwrap();
+        })).forget();
+        Ok::<(), Error>(())
+    }))?;
+
+    html.overlay.children.set_inner_html("");
+    node.children().iter().try_for_each(enclose!((html) |c| {
+        let child_el = {
+            let c = c.borrow();
+            let child_el: HtmlElement = document.create_element("div")?.unchecked_into();
+            child_el.set_text_content(Some(&c.val().writing.to_string()));
+            html.overlay.children.append_child(&child_el)?;
+            child_el
+        };
+        set_on_click(&child_el, enclose!((html, c) move |_event| {
+            on_character_click(html.clone(), &c).unwrap();
+        })).forget();
+        Ok::<(), Error>(())
+    }))?;
+
+    // let parents_str = node.parents().iter().map(|p| p.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
+    // let children_str = node.children().iter().map(|c| c.borrow().val().writing.to_string()).collect::<Vec<_>>().join("");
+
+    // html.overlay.parents.set_text_content(Some(&parents_str));
+    // html.overlay.children.set_text_content(Some(&children_str));
 
     html.overlay.wrapper.class_list().remove_1("hidden")?;
 
